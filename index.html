@@ -1,0 +1,571 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Phrong Madua Smart City - GIS Pro</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@300;400;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Sarabun', sans-serif; background-color: #f8fafc; overflow: hidden; overscroll-behavior-y: none; }
+        #map { height: 100%; width: 100%; z-index: 1; }
+        
+        /* Modal & UI */
+        .modal-container { position: fixed; inset: 0; background: rgba(2, 6, 23, 0.85); backdrop-filter: blur(10px); z-index: 9999; display: none; align-items: center; justify-content: center; padding: 1rem; }
+        .modal-active { display: flex !important; }
+        .custom-popup .leaflet-popup-content-wrapper { border-radius: 20px; padding: 0; overflow: hidden; box-shadow: 0 20px 40px -10px rgba(0,0,0,0.3); }
+        .custom-popup .leaflet-popup-content { margin: 0; width: 280px !important; }
+        .loading-overlay { position: fixed; inset: 0; background: #020617; z-index: 10000; display: flex; flex-direction: column; align-items: center; justify-content: center; color: white; display: none;}
+        .admin-only { display: none !important; }
+        body.is-admin .admin-only { display: flex !important; }
+        .img-preview { width: 100%; height: 150px; object-fit: cover; border-radius: 1rem; border: 2px dashed #cbd5e1; display: none; margin-top: 0.5rem; }
+
+        /* Mobile Sidebar */
+        #sidebar { transition: transform 0.3s ease-in-out; z-index: 1000; }
+        @media (max-width: 768px) {
+            #sidebar { position: absolute; top: 0; left: 0; bottom: 0; width: 85%; max-width: 320px; transform: translateX(-100%); }
+            #sidebar.open { transform: translateX(0); }
+            .custom-popup .leaflet-popup-content { width: 240px !important; }
+            .leaflet-control-zoom { display: none; } 
+        }
+        #sidebarOverlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 999; }
+        #sidebarOverlay.active { display: block; }
+        .custom-scroll::-webkit-scrollbar { width: 6px; }
+        .custom-scroll::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
+        
+        /* หมุดตรงกลาง (สไตล์แอป Grab) */
+        #centerMarker {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -100%);
+            z-index: 400;
+            pointer-events: none;
+            display: none;
+            font-size: 50px;
+            filter: drop-shadow(0px 8px 4px rgba(0,0,0,0.3));
+            animation: bounce 0.8s infinite alternate;
+        }
+        @keyframes bounce {
+            from { transform: translate(-50%, -100%); }
+            to { transform: translate(-50%, -110%); }
+        }
+    </style>
+</head>
+<body class="h-[100dvh] flex flex-col">
+    <div id="loader" class="loading-overlay">
+        <div class="animate-spin w-12 h-12 border-4 border-blue-500 border-t-transparent rounded-full mb-4"></div>
+        <p id="loaderText" class="font-bold tracking-widest text-blue-400 text-sm">LOADING...</p>
+    </div>
+
+    <header class="bg-slate-950 text-white h-16 md:h-20 flex-shrink-0 flex items-center justify-between px-4 md:px-8 shadow-2xl z-[100]">
+        <div class="flex items-center gap-3">
+            <button onclick="toggleSidebar()" class="md:hidden p-2 text-white hover:bg-slate-800 rounded-lg">
+                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
+            </button>
+            <div class="bg-blue-600 p-2 rounded-xl hidden md:block"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></div>
+            <div>
+                <h1 class="font-black text-lg md:text-xl leading-none">PHRONG MADUA <span class="text-blue-500 italic">PRO</span></h1>
+                <p class="text-[9px] text-slate-400 uppercase tracking-widest mt-1 hidden md:block">Smart Infrastructure</p>
+            </div>
+        </div>
+        <button id="adminToggleBtn" onclick="openModal('loginModal')" class="bg-slate-800 hover:bg-blue-600 px-3 md:px-5 py-2 rounded-xl text-[10px] md:text-xs font-black uppercase transition-all shadow-lg">Staff Login</button>
+    </header>
+
+    <div class="flex flex-1 overflow-hidden relative">
+        <div id="sidebarOverlay" onclick="toggleSidebar()"></div>
+
+        <aside id="sidebar" class="w-[350px] bg-white border-r flex flex-col shadow-2xl">
+            <div class="p-4 border-b flex items-center justify-between">
+                <input type="text" id="searchInput" placeholder="ค้นหาหมุด..." class="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm font-bold outline-none focus:border-blue-500">
+                <button onclick="toggleSidebar()" class="md:hidden ml-2 p-2 text-slate-500 hover:bg-slate-100 rounded-lg">X</button>
+            </div>
+            
+            <div class="flex-1 overflow-y-auto p-4 space-y-4 custom-scroll">
+                <div class="grid grid-cols-2 gap-2">
+                    <div class="bg-slate-900 p-3 rounded-2xl text-white shadow-md text-center"><p class="text-[9px] text-slate-400 uppercase">ทั้งหมด</p><span id="totalCount" class="text-2xl font-black">0</span></div>
+                    <div class="bg-rose-600 p-3 rounded-2xl text-white shadow-md text-center"><p class="text-[9px] text-rose-200 uppercase">ชำรุด</p><span id="brokenCount" class="text-2xl font-black">0</span></div>
+                </div>
+
+                <div class="bg-gradient-to-br from-orange-500 to-rose-600 p-5 rounded-2xl text-white shadow-md">
+                    <h3 class="font-black text-base mb-2">แจ้งเหตุร้องทุกข์</h3>
+                    <button onclick="startReportingFlow()" class="w-full bg-white text-rose-600 py-3 rounded-xl font-black text-[11px] uppercase shadow-lg hover:scale-105 transition">📍 กดเพื่อแจ้งปัญหา</button>
+                </div>
+
+                <div>
+                    <div class="flex justify-between items-center mb-2">
+                        <h2 class="text-[11px] font-black text-slate-400 uppercase">หมวดหมู่ (Layers)</h2>
+                        <button onclick="openModal('manageCatModal')" class="admin-only text-[10px] font-bold text-blue-600 bg-blue-50 px-2 py-1 rounded-md hover:bg-blue-100">+ จัดการ</button>
+                    </div>
+                    <div id="categoryList" class="space-y-1"></div>
+                </div>
+
+                <div class="admin-only flex flex-col gap-2 pb-4">
+                    <h2 class="text-[11px] font-black text-blue-600 uppercase mt-2">Staff Tools</h2>
+                    <div class="grid grid-cols-2 gap-2">
+                        <button onclick="openModal('importModal')" class="bg-emerald-600 text-white py-2.5 rounded-xl font-black text-[10px] uppercase shadow-sm flex justify-center items-center gap-1">📥 Import</button>
+                        <button onclick="openModal('exportModal')" class="bg-amber-500 text-white py-2.5 rounded-xl font-black text-[10px] uppercase shadow-sm flex justify-center items-center gap-1">📤 Export</button>
+                    </div>
+                </div>
+            </div>
+        </aside>
+
+        <main class="flex-1 relative">
+            <div id="map"></div>
+            
+            <div id="centerMarker">📍</div>
+
+            <div id="confirmLocationPanel" class="absolute bottom-6 left-4 right-4 z-[50] bg-white p-5 rounded-[2rem] shadow-2xl border-4 border-orange-500 hidden flex-col gap-3 max-w-[400px] mx-auto">
+                <div class="text-center">
+                    <h4 class="font-black text-orange-600 text-xl">📍 ปักหมุดจุดเกิดเหตุ</h4>
+                    <p class="text-xs font-bold text-slate-500 mt-1">ใช้นิ้วเลื่อนแผนที่ให้ตรงจุด แล้วกดปุ่มยืนยันด้านล่าง</p>
+                </div>
+                <button onclick="getUserLocation()" class="w-full bg-blue-50 text-blue-600 py-2 rounded-xl font-black text-xs active:scale-95 transition flex items-center justify-center gap-1">
+                    🔄 ดึงตำแหน่งของฉันใหม่
+                </button>
+                <div class="grid grid-cols-3 gap-2 mt-1">
+                    <button onclick="cancelReportingFlow()" class="col-span-1 bg-slate-100 text-slate-600 py-4 rounded-2xl font-black text-sm active:scale-95 transition">ยกเลิก</button>
+                    <button onclick="openReportModal()" class="col-span-2 bg-orange-600 text-white py-4 rounded-2xl font-black text-lg shadow-xl active:scale-95 transition">✅ เลือกจุดนี้</button>
+                </div>
+            </div>
+
+            <div id="actionFabs" class="absolute bottom-6 right-4 z-[40] flex flex-col gap-3">
+                <button onclick="getUserLocation()" class="bg-blue-600 w-12 h-12 rounded-full shadow-xl text-white flex items-center justify-center hover:bg-blue-700 border-2 border-white active:scale-95 transition-transform">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><circle cx="12" cy="12" r="3"/><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/></svg>
+                </button>
+                <button onclick="startReportingFlow()" class="md:hidden bg-rose-600 w-12 h-12 rounded-full shadow-xl text-white flex items-center justify-center border-2 border-white active:scale-95 transition-transform">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><line x1="12" y1="12" x2="12" y2="12"></line></svg>
+                </button>
+            </div>
+        </main>
+    </div>
+
+    <div id="loginModal" class="modal-container">
+        <div class="bg-white rounded-3xl shadow-xl w-[90%] max-w-[320px] overflow-hidden p-6 text-center">
+            <h3 class="font-black text-lg text-slate-900 uppercase mb-4">Staff Login</h3>
+            <input type="password" id="staffPassInput" class="w-full border bg-slate-50 p-3 rounded-xl text-center text-lg font-black outline-none mb-4" placeholder="รหัสผ่าน (1234)">
+            <div class="flex gap-2">
+                <button onclick="closeModal('loginModal')" class="flex-1 bg-slate-100 text-slate-600 py-3 rounded-xl font-black text-[10px] uppercase">ปิด</button>
+                <button onclick="verifyLogin()" class="flex-1 bg-blue-600 text-white py-3 rounded-xl font-black text-[10px] uppercase shadow-md">เข้าระบบ</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="manageCatModal" class="modal-container">
+        <div class="bg-white rounded-3xl shadow-xl w-[90%] max-w-[350px] overflow-hidden p-6">
+            <div class="flex justify-between items-center mb-3 border-b pb-3">
+                <h3 class="font-black text-lg text-slate-900 uppercase">จัดการหมวดหมู่</h3>
+                <button onclick="closeModal('manageCatModal')" class="text-slate-400 font-bold p-2">X</button>
+            </div>
+            <form id="addCatForm" class="mb-4 bg-slate-50 p-3 rounded-xl border border-slate-200">
+                <input type="text" id="newCatName" required class="w-full border p-2 rounded-lg text-xs outline-none mb-2" placeholder="ชื่อหมวดหมู่ใหม่">
+                <div class="flex gap-2 items-center">
+                    <input type="color" id="newCatColor" value="#3b82f6" class="w-8 h-8 rounded cursor-pointer">
+                    <button type="submit" class="flex-1 bg-slate-800 text-white py-2 rounded-lg font-black text-[10px]">เพิ่มหมวด</button>
+                </div>
+            </form>
+            <div id="deleteCatList" class="space-y-1 max-h-[120px] overflow-y-auto custom-scroll"></div>
+        </div>
+    </div>
+
+    <div id="exportModal" class="modal-container">
+        <div class="bg-white rounded-3xl shadow-xl w-[90%] max-w-[350px] overflow-hidden p-6">
+            <h3 class="font-black text-lg text-slate-900 uppercase mb-3 border-b pb-3">📤 นำออก (Export)</h3>
+            <select id="exportCatSelect" class="w-full border p-2.5 rounded-xl text-xs font-bold bg-slate-50 outline-none mb-4"></select>
+            <div class="flex gap-2">
+                <button onclick="closeModal('exportModal')" class="flex-1 bg-slate-100 text-slate-600 py-3 rounded-xl font-black text-[10px] uppercase">ยกเลิก</button>
+                <button onclick="executeExport()" class="flex-1 bg-amber-500 text-white py-3 rounded-xl font-black text-[10px] uppercase shadow-md">ดาวน์โหลด</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="importModal" class="modal-container">
+        <div class="bg-white rounded-3xl shadow-xl w-[90%] max-w-[350px] overflow-hidden p-6">
+            <h3 class="font-black text-lg text-slate-900 uppercase mb-3 border-b pb-3">📥 นำเข้า (Import)</h3>
+            <select id="importCatSelect" class="w-full border p-2.5 rounded-xl text-xs font-bold bg-slate-50 outline-none mb-3"></select>
+            <input type="file" id="csvFileInput" accept=".csv" class="w-full text-[10px] file:bg-blue-600 file:text-white file:border-0 file:px-3 file:py-1.5 file:rounded-lg mb-4 bg-slate-50 p-2 border rounded-xl">
+            <div class="flex gap-2">
+                <button onclick="closeModal('importModal')" class="flex-1 bg-slate-100 text-slate-600 py-3 rounded-xl font-black text-[10px] uppercase">ยกเลิก</button>
+                <button onclick="executeImport()" class="flex-1 bg-emerald-600 text-white py-3 rounded-xl font-black text-[10px] uppercase shadow-md">เริ่มนำเข้า</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="reportModal" class="modal-container">
+        <form id="reportForm" class="bg-white rounded-[2rem] shadow-2xl w-[95%] max-w-[400px] max-h-[90vh] overflow-y-auto custom-scroll overflow-hidden p-6 space-y-4">
+            
+            <div class="text-center mb-2">
+                <div class="w-16 h-16 bg-orange-100 rounded-full flex items-center justify-center mx-auto mb-2 text-3xl">📢</div>
+                <h3 class="font-black text-2xl text-slate-900">แจ้งปัญหาให้เราทราบ</h3>
+                <p class="text-xs font-bold text-slate-500 mt-1">เทศบาลตำบลโพรงมะเดื่อยินดีช่วยเหลือครับ</p>
+            </div>
+
+            <input type="hidden" id="repLat"><input type="hidden" id="repLng">
+            
+            <div class="bg-emerald-50 text-emerald-700 p-3 rounded-xl border border-emerald-200 text-center font-bold text-xs flex items-center justify-center gap-2">
+                <span class="text-lg">📍</span> ได้รับพิกัดตำแหน่งของคุณเรียบร้อยแล้ว
+            </div>
+
+            <div class="space-y-3 pt-2">
+                <div class="hidden">
+                    <label class="block text-sm font-black text-slate-700 mb-1">เกิดปัญหาเรื่องอะไรครับ? *</label>
+                    <select id="repType" class="w-full border-2 border-slate-200 p-3.5 rounded-xl text-base font-bold bg-slate-50 outline-none focus:border-orange-500">
+                        <option value="แจ้งเหตุร้องทุกข์">แจ้งเหตุร้องทุกข์</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-sm font-black text-slate-700 mb-1">รายละเอียดปัญหาที่พบ *</label>
+                    <textarea id="repDesc" rows="3" class="w-full border-2 border-slate-200 p-3.5 rounded-xl text-sm font-bold bg-slate-50 outline-none focus:border-orange-500" placeholder="ระบุปัญหาให้เจ้าหน้าที่ทราบ เช่น ไฟดับหน้าปากซอยทับทิม, ท่อประปาแตกน้ำเจิ่งนอง..." required></textarea>
+                </div>
+            </div>
+
+            <div>
+                <label class="block w-full bg-slate-50 border-2 border-dashed border-slate-300 text-slate-500 text-center p-4 rounded-xl cursor-pointer hover:bg-orange-50 hover:border-orange-300 transition">
+                    <span class="text-4xl mb-1 block">📸</span>
+                    <span class="font-black text-sm block text-slate-700">แตะเพื่อถ่ายรูป / แนบรูปภาพ</span>
+                    <input type="file" id="repImg" accept="image/*" class="hidden">
+                </label>
+                <input type="hidden" id="repImgData">
+                <img id="repImgPreview" class="img-preview w-full h-32 object-cover rounded-xl mt-2 hidden border border-slate-200 shadow-sm">
+            </div>
+
+            <div class="bg-orange-50/50 p-4 rounded-2xl border border-orange-100 space-y-3">
+                <h4 class="text-xs font-black text-orange-800 text-center uppercase tracking-widest">ข้อมูลสำหรับติดต่อกลับ</h4>
+                <div class="space-y-2">
+                    <input type="text" id="repName" placeholder="👤 ชื่อ - นามสกุล *" required class="w-full border border-white p-3.5 rounded-xl text-sm font-bold outline-none focus:border-orange-400 bg-white shadow-sm">
+                    <input type="tel" id="repPhone" placeholder="📞 เบอร์โทรศัพท์ *" required class="w-full border border-white p-3.5 rounded-xl text-sm font-bold outline-none focus:border-orange-400 bg-white shadow-sm">
+                    
+                    <div class="grid grid-cols-2 gap-2 pt-1">
+                        <input type="email" id="repEmail" placeholder="✉️ อีเมล (ไม่บังคับ)" class="w-full border border-white p-2.5 rounded-xl text-[10px] font-bold outline-none bg-white shadow-sm">
+                        <input type="text" id="repLine" placeholder="💬 Line ID (ไม่บังคับ)" class="w-full border border-white p-2.5 rounded-xl text-[10px] font-bold outline-none bg-white shadow-sm">
+                    </div>
+                </div>
+            </div>
+            
+            <div class="flex gap-2 pt-2 pb-2">
+                <button type="button" onclick="closeModal('reportModal')" class="flex-[1] bg-slate-200 text-slate-700 py-4 rounded-2xl font-black text-sm uppercase active:scale-95 transition">ยกเลิก</button>
+                <button type="submit" class="flex-[2] bg-orange-600 text-white py-4 rounded-2xl font-black text-lg shadow-xl active:scale-95 transition">🚀 ส่งแจ้งเหตุ</button>
+            </div>
+        </form>
+    </div>
+
+    <div id="pinModal" class="modal-container">
+        <form id="pinForm" class="bg-white rounded-3xl shadow-xl w-[90%] max-w-[400px] max-h-[90vh] overflow-y-auto custom-scroll overflow-hidden p-6 space-y-3">
+            <h3 class="font-black text-lg text-blue-600 uppercase mb-1">จัดการจุดพิกัด</h3>
+            <input type="hidden" id="inId"><input type="hidden" id="inLat"><input type="hidden" id="inLng">
+            <select id="inType" class="w-full border p-2.5 rounded-xl text-xs font-bold bg-slate-50 outline-none"></select>
+            <textarea id="inDesc" rows="2" class="w-full border p-2.5 rounded-xl text-xs font-bold bg-slate-50 outline-none" placeholder="รายละเอียด..."></textarea>
+            <div class="flex gap-2">
+                <label class="flex-1 bg-slate-50 text-slate-600 text-center p-2 rounded-xl border cursor-pointer font-bold text-[10px] has-[:checked]:bg-emerald-500 has-[:checked]:text-white"><input type="radio" name="status" value="ใช้งานปกติ" checked class="hidden"> ใช้งานปกติ</label>
+                <label class="flex-1 bg-slate-50 text-slate-600 text-center p-2 rounded-xl border cursor-pointer font-bold text-[10px] has-[:checked]:bg-rose-500 has-[:checked]:text-white"><input type="radio" name="status" value="ชำรุด" class="hidden"> ชำรุด</label>
+            </div>
+            <input type="file" id="inImg" accept="image/*" class="w-full text-[10px]">
+            <input type="hidden" id="inImgData">
+            <img id="inImgPreview" class="img-preview">
+            <div class="flex gap-2 pt-1">
+                <button type="button" onclick="closeModal('pinModal')" class="flex-1 bg-slate-100 text-slate-600 py-3 rounded-xl font-black text-[10px] uppercase">ยกเลิก</button>
+                <button type="submit" class="flex-[2] bg-blue-600 text-white py-3 rounded-xl font-black text-[10px] uppercase shadow-md">บันทึก</button>
+            </div>
+        </form>
+    </div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script>
+        // ==========================================
+        // 🔴 สำคัญ: เปลี่ยนค่านี้เป็น URL ของ Google Apps Script ของคุณ
+        // (ต้องทำการ Deploy Web App รอบใหม่ แล้วเอา URL มาใส่)
+        // ==========================================
+        const WEB_APP_URL = "https://script.google.com/macros/s/AKfycbyStUztty-8Ol7hrX2aJYzDPeePMOdJ73se6pqC3da7ziKGn7QkirAzpXdid7f7Y4UHYw/exec"; 
+
+        window.categories = []; window.pins = []; window.activeFilter = 'all'; window.isAdmin = false; 
+
+        const showLoader = (txt) => { document.getElementById('loaderText').innerText = txt; document.getElementById('loader').style.display = 'flex'; };
+        const hideLoader = () => document.getElementById('loader').style.display = 'none';
+        const openModal = (id) => document.getElementById(id).classList.add('modal-active');
+        const closeModal = (id) => document.getElementById(id).classList.remove('modal-active');
+        const toggleSidebar = () => { 
+            document.getElementById('sidebar').classList.toggle('open'); 
+            document.getElementById('sidebarOverlay').classList.toggle('active');
+        };
+
+        // ฟังก์ชันตัวกลางสำหรับส่ง HTTP Request ไปยัง Google Apps Script
+        function sendPostRequest(action, payload, onSuccess) {
+            fetch(WEB_APP_URL, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'text/plain;charset=utf-8',
+                },
+                body: JSON.stringify({ action: action, payload: payload })
+            })
+            .then(response => response.json())
+            .then(resData => {
+                if (onSuccess) onSuccess(resData);
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                alert("เกิดข้อผิดพลาดในการติดต่อกับเซิร์ฟเวอร์");
+                hideLoader();
+            });
+        }
+
+        function loadData() {
+            showLoader("กำลังโหลดข้อมูล...");
+            fetch(WEB_APP_URL + "?action=getInitialData")
+                .then(response => response.json())
+                .then(data => {
+                    window.categories = data.categories.length > 0 ? data.categories : [{ name: 'ไฟฟ้าสาธารณะ', color: '#facc15' }];
+                    window.pins = data.pins || []; 
+                    updateUI(); 
+                    hideLoader();
+                })
+                .catch(err => {
+                    console.error('Error fetching data:', err);
+                    hideLoader();
+                    alert("ไม่สามารถโหลดข้อมูลได้ กรุณาตรวจสอบ URL");
+                });
+        }
+
+        function initMap() {
+            const googleStreets = L.tileLayer('https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}', { maxZoom: 20 });
+            window.map = L.map('map', { zoomControl: window.innerWidth > 768, layers: [googleStreets] }).setView([13.8105, 100.0047], 15);
+            window.markerLayer = L.layerGroup().addTo(window.map);
+
+            window.map.on('click', (e) => {
+                if (window.isAdmin && !document.querySelector('.modal-active') && document.getElementById('centerMarker').style.display !== 'block') {
+                    document.getElementById('pinForm').reset(); document.getElementById('inId').value = "";
+                    document.getElementById('inLat').value = e.latlng.lat; document.getElementById('inLng').value = e.latlng.lng;
+                    document.getElementById('inImgPreview').style.display = 'none'; document.getElementById('inImgData').value = '';
+                    if(window.activeFilter !== 'all') document.getElementById('inType').value = window.activeFilter;
+                    openModal('pinModal');
+                }
+            });
+        }
+
+        function updateUI() {
+            document.getElementById('totalCount').innerText = window.pins.length;
+            document.getElementById('brokenCount').innerText = window.pins.filter(p => p.status === 'ชำรุด').length;
+            
+            const catOpts = window.categories.map(c => `<option value="${c.name}">${c.name}</option>`).join('');
+            document.getElementById('inType').innerHTML = catOpts;
+            document.getElementById('importCatSelect').innerHTML = catOpts;
+            document.getElementById('exportCatSelect').innerHTML = `<option value="all">ทั้งหมด (All Layers)</option>` + catOpts;
+
+            let html = `<button onclick="setFilter('all')" class="w-full text-left px-3 py-2.5 rounded-xl mb-1.5 ${window.activeFilter==='all'?'bg-slate-900 text-white':'bg-slate-50'} text-xs font-black">รวมทั้งหมด (${window.pins.length})</button>`;
+            let delHtml = '';
+
+            window.categories.forEach(c => {
+                let count = window.pins.filter(p => p.type === c.name).length;
+                html += `<button onclick="setFilter('${c.name}')" class="w-full flex items-center justify-between px-3 py-2.5 rounded-xl mb-1.5 ${window.activeFilter===c.name?'bg-slate-900 text-white':'bg-slate-50 hover:bg-slate-100'} transition"><span class="flex items-center gap-2 text-xs font-bold"><div class="w-2.5 h-2.5 rounded-full" style="background:${c.color}"></div> ${c.name}</span><span class="text-[10px] px-2 py-0.5 rounded-md bg-white/50 text-slate-800">${count}</span></button>`;
+                delHtml += `<div class="flex justify-between items-center bg-slate-50 p-2 rounded-lg border text-xs font-bold"><span>${c.name}</span><button onclick="deleteCat('${c.name}')" class="bg-rose-100 text-rose-600 px-2 py-1 rounded hover:bg-rose-500 hover:text-white">ลบ</button></div>`;
+            });
+            document.getElementById('categoryList').innerHTML = html;
+            document.getElementById('deleteCatList').innerHTML = delHtml;
+
+            renderMarkers();
+        }
+
+        window.setFilter = (f) => { window.activeFilter = f; updateUI(); if(window.innerWidth <= 768) toggleSidebar(); };
+
+        function renderMarkers() {
+            window.markerLayer.clearLayers();
+            const search = document.getElementById('searchInput').value.toLowerCase();
+            window.pins.forEach(p => {
+                if (window.activeFilter !== 'all' && p.type !== window.activeFilter) return;
+                if (search && !p.desc.toLowerCase().includes(search) && !p.type.toLowerCase().includes(search)) return;
+                
+                const cat = window.categories.find(c => c.name === p.type) || { color: '#64748b' };
+                const marker = L.circleMarker([p.lat, p.lng], { radius: 8, fillColor: cat.color, color: "#fff", weight: 2, fillOpacity: 1 });
+                
+                let imgHtml = p.imgUrl ? `<img src="${p.imgUrl}" style="width:100%; height:110px; object-fit:cover; margin-top:5px; border-radius:12px;">` : '';
+                let streetViewUrl = `https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${p.lat},${p.lng}`;
+                let streetViewBtn = `<a href="${streetViewUrl}" target="_blank" style="display:block; background:#10b981; color:white; border:none; padding:8px; border-radius:8px; margin-top:8px; text-decoration:none; text-align:center; font-weight:bold; font-size:11px; font-family:'Sarabun',sans-serif;">🚶‍♂️ ดูสถานที่จริง (Street View)</a>`;
+                
+                let adminBtns = window.isAdmin ? `
+                    <div style="display:flex; gap:5px; margin-top:5px;">
+                        <button onclick="editPin('${p.id}')" style="flex:1; background:#2563eb; color:white; border:none; padding:6px; border-radius:8px; font-weight:bold; font-size:10px;">แก้ไข</button>
+                        <button onclick="deletePin('${p.id}')" style="flex:1; background:#e11d48; color:white; border:none; padding:6px; border-radius:8px; font-weight:bold; font-size:10px;">ลบ</button>
+                    </div>` : '';
+                
+                let popupContent = `
+                    <div style="text-align:center; padding: 5px;">
+                        <h4 style="margin:0; font-weight:900; font-size:14px; color:${cat.color};">${p.type}</h4>
+                        <span style="font-size:9px; background:${p.status==='ชำรุด'?'#ffe4e6':'#d1fae5'}; color:${p.status==='ชำรุด'?'#e11d48':'#059669'}; padding:2px 6px; border-radius:10px; font-weight:bold; display:inline-block; margin-top:4px;">${p.status}</span>
+                        <p style="margin:6px 0; font-size:11px; text-align:left; background:#f8fafc; padding:6px; border-radius:8px;">${p.desc || '-'}</p>
+                        ${imgHtml} ${streetViewBtn} ${adminBtns}
+                    </div>
+                `;
+                marker.bindPopup(popupContent, { className: 'custom-popup' });
+                window.markerLayer.addLayer(marker);
+            });
+        }
+
+        window.startReportingFlow = () => { 
+            if (document.getElementById('sidebar').classList.contains('open')) toggleSidebar(); 
+            document.getElementById('actionFabs').classList.add('hidden');
+            document.getElementById('centerMarker').style.display = 'block';
+            document.getElementById('confirmLocationPanel').classList.remove('hidden');
+            document.getElementById('confirmLocationPanel').classList.add('flex');
+            getUserLocation();
+        };
+
+        window.openReportModal = () => {
+            const center = window.map.getCenter();
+            document.getElementById('centerMarker').style.display = 'none';
+            document.getElementById('confirmLocationPanel').classList.add('hidden');
+            document.getElementById('confirmLocationPanel').classList.remove('flex');
+            document.getElementById('actionFabs').classList.remove('hidden');
+
+            document.getElementById('reportForm').reset(); 
+            document.getElementById('repLat').value = center.lat; 
+            document.getElementById('repLng').value = center.lng;
+            document.getElementById('repImgPreview').style.display = 'none'; 
+            document.getElementById('repImgData').value = '';
+            
+            openModal('reportModal');
+        };
+
+        window.cancelReportingFlow = () => {
+            document.getElementById('centerMarker').style.display = 'none';
+            document.getElementById('confirmLocationPanel').classList.add('hidden');
+            document.getElementById('confirmLocationPanel').classList.remove('flex');
+            document.getElementById('actionFabs').classList.remove('hidden');
+        };
+
+        window.getUserLocation = () => {
+            if (navigator.geolocation) {
+                showLoader("กำลังค้นหาพิกัด GPS...");
+                navigator.geolocation.getCurrentPosition(pos => {
+                    window.map.flyTo([pos.coords.latitude, pos.coords.longitude], 18);
+                    hideLoader();
+                }, () => {
+                    hideLoader();
+                    alert("กรุณาเปิด GPS/Location ในมือถือเพื่อความแม่นยำครับ");
+                });
+            }
+        };
+        
+        window.verifyLogin = () => {
+            if(document.getElementById('staffPassInput').value === "1234") {
+                window.isAdmin = true; document.body.classList.add('is-admin');
+                document.getElementById('adminToggleBtn').innerText = "Log Out";
+                document.getElementById('adminToggleBtn').onclick = () => location.reload();
+                closeModal('loginModal'); updateUI();
+            } else { alert("รหัสผ่านไม่ถูกต้อง"); }
+        };
+
+        document.getElementById('addCatForm').onsubmit = (e) => {
+            e.preventDefault(); showLoader("กำลังเพิ่มหมวดหมู่...");
+            const payload = {
+                name: document.getElementById('newCatName').value, 
+                color: document.getElementById('newCatColor').value
+            };
+            sendPostRequest('saveCategory', payload, () => {
+                document.getElementById('newCatName').value = ''; loadData();
+            });
+        };
+        
+        window.deleteCat = (name) => {
+            if(confirm(`ลบหมวดหมู่ "${name}" หรือไม่?`)) { 
+                showLoader("Deleting..."); 
+                sendPostRequest('deleteCategory', {name: name}, () => loadData());
+            }
+        };
+
+        window.editPin = (id) => {
+            const p = window.pins.find(x => x.id === id); if(!p) return;
+            document.getElementById('inId').value = p.id; document.getElementById('inLat').value = p.lat; document.getElementById('inLng').value = p.lng;
+            document.getElementById('inType').value = p.type; document.getElementById('inDesc').value = p.desc;
+            document.getElementById('inImgData').value = p.imgUrl || "";
+            if(p.imgUrl) { document.getElementById('inImgPreview').src = p.imgUrl; document.getElementById('inImgPreview').style.display = 'block'; }
+            else { document.getElementById('inImgPreview').style.display = 'none'; }
+            const statusRadio = document.querySelector(`input[name="status"][value="${p.status}"]`);
+            if (statusRadio) statusRadio.checked = true; else document.querySelector('input[name="status"][value="ใช้งานปกติ"]').checked = true;
+            window.map.closePopup(); openModal('pinModal');
+        };
+
+        window.deletePin = (id) => {
+            if(confirm("ลบจุดพิกัดนี้ถาวร?")) { 
+                showLoader("Deleting..."); 
+                sendPostRequest('deletePin', {id: id}, () => loadData());
+            }
+        };
+
+        window.executeExport = () => {
+            const filterCat = document.getElementById('exportCatSelect').value;
+            let exportData = filterCat === 'all' ? window.pins : window.pins.filter(p => p.type === filterCat);
+            if(exportData.length === 0) return alert("ไม่มีข้อมูล");
+            let csv = "\uFEFFID,ละติจูด,ลองจิจูด,หมวดหมู่,รายละเอียด,สถานะ,รูปภาพ,ชื่อผู้แจ้ง,เบอร์โทร\n";
+            exportData.forEach(r => csv += `${r.id},${r.lat},${r.lng},${r.type},"${r.desc}",${r.status},${r.imgUrl},"${r.reporterName}","${r.reporterPhone}"\n`);
+            const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+            const link = document.createElement("a"); link.href = URL.createObjectURL(blob); link.download = `GIS_Export_${filterCat==='all'?'All':filterCat}.csv`; link.click(); closeModal('exportModal');
+        };
+
+        window.executeImport = () => {
+            const targetCat = document.getElementById('importCatSelect').value;
+            const file = document.getElementById('csvFileInput').files[0];
+            if (!file) return alert("เลือกไฟล์ CSV ก่อน");
+            showLoader("กำลังนำเข้า...");
+            const reader = new FileReader();
+            reader.onload = e => {
+                const rows = e.target.result.split('\n').filter(r => r.trim() !== '').slice(1);
+                const data = rows.map(r => { const c = r.split(','); return { lat: parseFloat(c[0]), lng: parseFloat(c[1]), desc: c[2] ? c[2].trim() : '' }; }).filter(d => !isNaN(d.lat) && !isNaN(d.lng));
+                if(data.length === 0) { hideLoader(); return alert("ไม่พบข้อมูลพิกัดในไฟล์"); }
+                
+                sendPostRequest('importCSV', {data: data, targetCategory: targetCat}, (res) => {
+                    closeModal('importModal'); document.getElementById('csvFileInput').value = ''; loadData(); alert(`นำเข้าสำเร็จ ${res.count} จุด`); 
+                });
+            }; reader.readAsText(file);
+        };
+
+        const setupImg = (inpId, preId, hidId) => {
+            document.getElementById(inpId).onchange = e => {
+                const f = e.target.files[0]; if(!f) return;
+                const reader = new FileReader();
+                reader.onload = ev => {
+                    const img = new Image(); img.onload = () => {
+                        const cvs = document.createElement('canvas'); const scale = 600/img.width;
+                        cvs.width = 600; cvs.height = img.height*scale; cvs.getContext('2d').drawImage(img,0,0,cvs.width,cvs.height);
+                        const b64 = cvs.toDataURL('image/jpeg', 0.6);
+                        document.getElementById(preId).src = b64; document.getElementById(preId).style.display = 'block'; document.getElementById(hidId).value = b64;
+                    }; img.src = ev.target.result;
+                }; reader.readAsDataURL(f);
+            };
+        };
+
+        window.onload = () => {
+            initMap(); loadData();
+            setupImg('repImg', 'repImgPreview', 'repImgData');
+            setupImg('inImg', 'inImgPreview', 'inImgData');
+            document.getElementById('searchInput').oninput = updateUI;
+
+            document.getElementById('reportForm').onsubmit = (e) => {
+                e.preventDefault(); showLoader("กำลังส่งข้อมูล...");
+                const data = { 
+                    lat: document.getElementById('repLat').value, lng: document.getElementById('repLng').value, 
+                    type: "แจ้งเหตุร้องทุกข์",
+                    desc: document.getElementById('repDesc').value, 
+                    imgUrl: document.getElementById('repImgData').value, status: 'ชำรุด', source: 'Citizen',
+                    reporterName: document.getElementById('repName').value, reporterPhone: document.getElementById('repPhone').value,
+                    reporterEmail: document.getElementById('repEmail').value, reporterLine: document.getElementById('repLine').value
+                };
+                sendPostRequest('savePin', data, () => {
+                    closeModal('reportModal'); loadData(); alert("รับเรื่องเรียบร้อย! ระบบได้ส่งอีเมลยืนยันให้ท่านแล้ว (หากระบุอีเมลไว้)"); 
+                });
+            };
+
+            document.getElementById('pinForm').onsubmit = (e) => {
+                e.preventDefault(); showLoader("Saving...");
+                const data = { 
+                    id: document.getElementById('inId').value, lat: document.getElementById('inLat').value, lng: document.getElementById('inLng').value, 
+                    type: document.getElementById('inType').value, desc: document.getElementById('inDesc').value, 
+                    imgUrl: document.getElementById('inImgData').value, status: document.querySelector('input[name="status"]:checked').value 
+                };
+                sendPostRequest('savePin', data, () => {
+                    closeModal('pinModal'); loadData(); 
+                });
+            };
+        };
+    </script>
+</body>
+</html>
